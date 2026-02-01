@@ -28,8 +28,3 @@ Most Python games rely on heavy libraries like `Pygame` or `Pyglet`. This engine
 The engine currently features a custom arrangement of **"Dark is the Night" (Тёмная ночь)**, demonstrating complex rhythmic structures like triplets and staccato "gates."
 
 # The engine parses this into raw PCM frequencies and timings
-
-
-## Python Windows API Game Engine (v1.1)
-
-A high-performance, zero-dependency 2D game engine built from scratch using Python and the native Windows API (ctypes). This project bypasses high-level libraries like PyGame to interface directly with the Windows Kernel, Graphics Device Interface (GDI), and Multimedia Control Interface (MCI).
