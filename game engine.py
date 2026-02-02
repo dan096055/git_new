@@ -1,6 +1,6 @@
 """
 ====================================================================================================
-                                       ENGINE REFERENCE MANUAL (v1.1)
+                                       ENGINE REFERENCE MANUAL (v1.1m)
 ====================================================================================================
 [1] KERNEL-LEVEL INTEGRATION
     This engine operates by mapping Python objects to C-structures defined in 'win32'. It 
