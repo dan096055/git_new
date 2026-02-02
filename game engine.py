@@ -41,6 +41,34 @@
 [6] EXECUTION
     - Unique Session IDs are generated to prevent 'PermissionError' when writing .wav files.
     - The engine maintains a steady 60Hz tick rate via the WM_TIMER dispatch.
+
+[7] API REFERENCE
+    --------------------------------------------------------------------------------------------
+    CORE SYSTEM:
+    * WindowEngine(title, width, height, bg_color) -> Main Game Instance.
+      - .add(object) -> Registers an entity (Ball, Box, Sound) to the game loop.
+      - .run()       -> Starts the infinite message pump.
+    * RGB(r, g, b)   -> Returns a 32-bit integer color code (0x00BBGGRR).
+
+    GRAPHICS:
+    * Text.draw(hdc, x, y, text, color, size) -> Renders text to the buffer.
+    * Box(x, y, w, h, color)    -> Creates a rectangle entity.
+    * Circle(x, y, radius, color) -> Creates a circle entity.
+
+    PHYSICS:
+    * Physics.circle_collide(c1, c2) -> Returns True if two Circle objects overlap.
+    * Physics.resolve_elastic(c1, c2)-> Modifies velocities to simulate elastic bounce.
+
+    AUDIO & SYNTHESIS:
+    * Sound(filename) -> Loads a WAV file into the MCI system.
+      - .play(loop=False) -> Starts playback.
+      - .update()         -> Must be called every frame to handle software looping.
+    * Synth.tone(note, ms, vol, type) -> Generates raw PCM bytes for a specific note.
+    * Synth.save(filename, data)      -> Writes PCM bytes to a valid WAV file.
+    * Melody.compile(filename, bpm, notes_string) -> Generates a full song file.
+      - Format: "(Note_Duration, ...)" e.g., "(C4_1/4, E4_1/4)"
+      - Durations: 1/4 = Quarter note, 1/1 = Whole note.
+    --------------------------------------------------------------------------------------------
 ====================================================================================================
 """
 
