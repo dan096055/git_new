@@ -18,4 +18,5 @@ This update focuses on resolving hardware driver incompatibilities and ensuring 
 ## Update 1.1m - Extended manual
 
 **Release Date:** February 2, 2026
+
 In this update, list of functions was added into a manual
