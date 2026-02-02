@@ -13,3 +13,10 @@ This update focuses on resolving hardware driver incompatibilities and ensuring 
 * **Robust Melody Parser:** The music compiler now includes a sanitizer that strips parentheses and whitespace from input strings, preventing `ValueError` during float conversion.
 * **Kernel Interface:** Switched to a manually defined `WNDCLASS` structure and verified `kernel32` linkage, improving compatibility across different Windows versions.
 * **Physics Upgrade:** Collision resolution now utilizes **Minimum Translation Distance (MTD)** to prevent rigid bodies from sticking together during overlap.
+
+=============================================================================================================================================================================================================
+
+## Update 1.1m - Extended manual
+
+**Release Date:** February 2, 2026
+In this update, list of functions was added into a manual
