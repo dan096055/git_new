@@ -14,8 +14,7 @@ This update focuses on resolving hardware driver incompatibilities and ensuring 
 * **Kernel Interface:** Switched to a manually defined `WNDCLASS` structure and verified `kernel32` linkage, improving compatibility across different Windows versions.
 * **Physics Upgrade:** Collision resolution now utilizes **Minimum Translation Distance (MTD)** to prevent rigid bodies from sticking together during overlap.
 
-=============================================================================================================================================================================================================
-
+============================================================================================
 ## Update 1.1m - Extended manual
 
 **Release Date:** February 2, 2026
