@@ -1,46 +1,42 @@
 """
 ====================================================================================================
-                                       ENGINE REFERENCE MANUAL (v1.1m)
+                                       ENGINE REFERENCE MANUAL (v1.2)
 ====================================================================================================
 [1] KERNEL-LEVEL INTEGRATION
-    This engine operates by mapping Python objects to C-structures defined in 'win32'. It 
-    bypasses high-level wrappers to interact directly with:
-    - user32.dll: Handles the Window Procedure (WndProc) and message queue.
-    - gdi32.dll: Manages device contexts (HDC) and raster graphics operations.
-    - winmm.dll: Provides low-level access to the Multimedia Control Interface (MCI).
+    This engine operates by mapping Python objects to C-structures defined in the Windows API. 
+    It bypasses high-level wrappers to interact directly with core system libraries:
+    - USER32.DLL: Manages the Window Procedure (WndProc), Message Pump, and Inputs.
+    - GDI32.DLL: The Graphics Device Interface. Manages Device Contexts (HDC) and Raster Ops.
+    - WINMM.DLL: The Windows Multimedia library for MCI (Multimedia Control Interface) commands.
 
 [2] GRAPHICS & MEMORY MANAGEMENT
-    - DOUBLE BUFFERING: To ensure 0% screen tearing, the engine allocates a 'Compatible Bitmap' 
-      in system memory. Drawing occurs on this back-buffer. The 'BitBlt' (Bit Block Transfer) 
-      function then performs a high-speed memory copy of the pixel data to the screen's HDC.
-    - BITWISE COLORING: Colors are stored as 32-bit integers where the first 24 bits represent 
-      Blue, Green, and Red (0x00BBGGRR). The RGB() function uses bit-shifting: (B << 16 | G << 8 | R).
+    - DOUBLE BUFFERING: To ensure 0% screen flickering, the engine allocates a 'Compatible Bitmap' 
+      in system RAM. All drawing occurs on this back-buffer. The 'BitBlt' (Bit Block Transfer) 
+      function then performs a high-speed memory-to-VRAM copy of the pixel data to the screen.
+    - BITWISE COLORING: Colors are stored as 32-bit integers in 0x00BBGGRR format. 
+      The RGB() function uses bit-shifting: (B << 16 | G << 8 | R) to pack channels.
 
 [3] MATHEMATICAL PHYSICS (Elasticity & Vectors)
-    - RIGID BODY COLLISION: Circles are treated as mathematical points with a radius 'r'. 
-    - RADIUS OVERLAP: Collision is detected if the Euclidean distance between two points 
-      is less than (r1 + r2). We use squared distance to avoid the CPU-heavy square root.
-    - MOMENTUM TRANSFER: Upon collision, we calculate the 'Unit Normal' and 'Unit Tangent' 
-      vectors. We then project the velocity vectors onto these axes using the Dot Product 
-      to determine the scalar velocities for the bounce.
+    - RADIUS OVERLAP: Collision is detected by comparing squared distance against the squared 
+      sum of radii. This avoids the CPU-heavy square root calculation during the detection phase.
+    - MTD RESOLUTION: If balls overlap, the engine calculates the Minimum Translation Distance 
+      to physically separate them before calculating momentum.
+    - MOMENTUM TRANSFER: Uses 2D Vector Projection (Dot Product) to swap scalar velocities 
+      along the collision normal while preserving tangential velocity.
 
-[4] AUDIO SYNTHESIS & SOFTWARE LOOPING
-    - WAVEFORM GENERATION: Raw PCM (Pulse Code Modulation) is created by sampling a sine wave 
-      at 44,100 Hz. The 'Synth' class packs these samples into a binary 'RIFF' container.
-    - MCI ABSTRACTION: The engine uses string-based commands to control audio.
-    - STABLE LOOPING: Unlike hardware looping which varies by driver, this version implements
-      a 'Software Monitor'. The engine polls the audio hardware status; if a 'stopped' state
-      is detected on a looping track, Python re-initializes the playback immediately.
+[4] AUDIO SYNTHESIS (High-Fidelity)
+    - LINEAR INTERPOLATION (Lerp): When resampling audio (pitch shifting), the engine calculates
+      the exact fractional value between two samples: val = y1 + (y2 - y1) * (x - x1).
+      This eliminates the metallic "aliasing" noise found in simpler engines.
+    - SOFTWARE LOOPING: v1.2 polls the hardware status 60 times/second. If a looping track stops,
+      Python restarts it manually, bypassing unreliable hardware loop flags.
 
-[5] PROCESS LIFECYCLE MANAGEMENT (Cleanup Fix)
-    - MCI GHOSTING: Windows drivers often continue playing audio even after a Python script ends.
-    - THE FIX: Every Sound object is registered in a global list. When the Window Procedure 
-      receives a WM_DESTROY message, the engine iterates through all registered aliases and 
-      sends the "close" command, terminating all audio threads instantly.
-
-[6] EXECUTION
-    - Unique Session IDs are generated to prevent 'PermissionError' when writing .wav files.
-    - The engine maintains a steady 60Hz tick rate via the WM_TIMER dispatch.
+[5] PROCESS LIFECYCLE & CLEANUP
+    - EXIT HOOKS: On WM_DESTROY, the engine iterates through the ACTIVE_SOUNDS registry and 
+      explicitly sends 'close' commands to Windows. This prevents "ghost music" from 
+      playing after the window is closed.
+    - SESSION SAFETY: Unique Session IDs (SIDs) are appended to all .wav files to ensure 
+      multiple runs do not result in PermissionErrors due to file locks.
 
 [7] API REFERENCE
     --------------------------------------------------------------------------------------------
@@ -55,16 +51,13 @@
     * Box(x, y, w, h, color)    -> Creates a rectangle entity.
     * Circle(x, y, radius, color) -> Creates a circle entity.
 
-    PHYSICS:
-    * Physics.circle_collide(c1, c2) -> Returns True if two Circle objects overlap.
-    * Physics.resolve_elastic(c1, c2)-> Modifies velocities to simulate elastic bounce.
-
     AUDIO & SYNTHESIS:
     * Sound(filename) -> Loads a WAV file into the MCI system.
       - .play(loop=False) -> Starts playback.
       - .update()         -> Must be called every frame to handle software looping.
     * Synth.tone(note, ms, vol, type) -> Generates raw PCM bytes for a specific note.
     * Synth.save(filename, data)      -> Writes PCM bytes to a valid WAV file.
+    * Sampler(file, base_note) -> Imports WAV with Linear Interpolation.
     * Melody.compile(filename, bpm, notes_string) -> Generates a full song file.
       - Format: "(Note_Duration, ...)" e.g., "(C4_1/4, E4_1/4)"
       - Durations: 1/4 = Quarter note, 1/1 = Whole note.
@@ -82,23 +75,27 @@ import os
 import time
 
 # =================================================================================
-# PART 1: WINDOWS API DEFINITIONS
+# PART 1: WINDOWS API DEFINITIONS (The Core System)
 # =================================================================================
 
-user32 = ctypes.windll.user32
-gdi32 = ctypes.windll.gdi32
-kernel32 = ctypes.windll.kernel32
-winmm = ctypes.windll.winmm
+# --- Load System DLLs ---
+user32 = ctypes.windll.user32      # Window management, inputs
+gdi32 = ctypes.windll.gdi32        # Graphics drawing functions
+kernel32 = ctypes.windll.kernel32  # Memory and Module handling
+winmm = ctypes.windll.winmm        # Audio and Multimedia
 
+# --- Define Pointer Sizes ---
 if ctypes.sizeof(ctypes.c_void_p) == 8: 
-    LRESULT = ctypes.c_longlong 
+    LRESULT = ctypes.c_longlong # 64-bit
 else: 
-    LRESULT = ctypes.c_long
+    LRESULT = ctypes.c_long     # 32-bit
 
+# --- Define Missing Windows Types ---
 if not hasattr(wintypes, 'HCURSOR'): wintypes.HCURSOR = wintypes.HANDLE
 if not hasattr(wintypes, 'HBRUSH'): wintypes.HBRUSH = wintypes.HANDLE
 if not hasattr(wintypes, 'LPCWSTR'): wintypes.LPCWSTR = ctypes.c_wchar_p
 
+# --- Windows Constants ---
 WS_OVERLAPPEDWINDOW = 0x00CF0000
 CW_USEDEFAULT = 0x80000000
 WM_DESTROY = 2
@@ -108,8 +105,10 @@ SW_SHOW = 5
 SRCCOPY = 0x00CC0020
 TRANSPARENT = 1
 
-# Global registry for audio cleanup
+# Registry for cleanup
 ACTIVE_SOUNDS = []
+
+# --- C-Structures ---
 
 class PAINTSTRUCT(ctypes.Structure):
     _fields_ = [("hdc", wintypes.HANDLE), ("fErase", wintypes.BOOL),
@@ -123,6 +122,7 @@ class RECT(ctypes.Structure):
 class SIZE(ctypes.Structure):
     _fields_ = [("cx", ctypes.c_long), ("cy", ctypes.c_long)]
 
+# Manually define WNDCLASS (Required for RegisterClassW)
 WNDPROCTYPE = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 class WNDCLASS(ctypes.Structure):
     _fields_ = [('style', wintypes.UINT),
@@ -136,6 +136,7 @@ class WNDCLASS(ctypes.Structure):
                 ('lpszMenuName', wintypes.LPCWSTR),
                 ('lpszClassName', wintypes.LPCWSTR)]
 
+# --- Define Argument Types (Prevents Segmentation Faults) ---
 user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 user32.DefWindowProcW.restype = LRESULT
 gdi32.SetTextColor.argtypes = [wintypes.HANDLE, wintypes.DWORD]
@@ -146,13 +147,16 @@ gdi32.GetTextExtentPoint32W.argtypes = [wintypes.HANDLE, wintypes.LPCWSTR, ctype
 gdi32.Ellipse.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
 gdi32.SelectObject.restype = wintypes.HANDLE
 
-def RGB(r, g, b): return r | (g << 8) | (b << 16)
+def RGB(r, g, b): 
+    """Converts R,G,B integers to a 32-bit color code."""
+    return r | (g << 8) | (b << 16)
 
 # =================================================================================
-# PART 2: GRAPHICS & PHYSICS
+# PART 2: GRAPHICS & PHYSICS ENGINE
 # =================================================================================
 
 class Text:
+    """Static Helper for Rendering Text."""
     @staticmethod
     def _font(hdc, size, color):
         gdi32.SetBkMode(hdc, TRANSPARENT)
@@ -167,31 +171,47 @@ class Text:
         gdi32.SelectObject(hdc, oF); gdi32.DeleteObject(hF)
 
 class Physics:
+    """Math Library for collision logic."""
     @staticmethod
     def circle_collide(c1, c2):
+        # Using distance squared to avoid costly sqrt()
         dx = (c1.x + c1.r) - (c2.x + c2.r)
         dy = (c1.y + c1.r) - (c2.y + c2.r)
         return (dx*dx + dy*dy) < (c1.r + c2.r)**2
 
     @staticmethod
     def resolve_elastic(b1, b2):
+        # 1. Geometry
         c1x, c1y = b1.x + b1.r, b1.y + b1.r
         c2x, c2y = b2.x + b2.r, b2.y + b2.r
         dx, dy = c1x - c2x, c1y - c2y
         dist = math.sqrt(dx*dx + dy*dy)
         if dist == 0: return
 
+        # 2. MTD (Minimum Translation Distance) to un-stick balls
         overlap = 0.5 * (dist - (b1.r + b2.r))
         b1.x -= overlap * (dx / dist); b1.y -= overlap * (dy / dist)
         b2.x += overlap * (dx / dist); b2.y += overlap * (dy / dist)
 
-        nx, ny = dx / dist, dy / dist; tx, ty = -ny, nx
-        dpTan1 = b1.vx * tx + b1.vy * ty; dpTan2 = b2.vx * tx + b2.vy * ty
-        dpNorm1 = b1.vx * nx + b1.vy * ny; dpNorm2 = b2.vx * nx + b2.vy * ny
-        b1.vx = tx * dpTan1 + nx * dpNorm2; b1.vy = ty * dpTan1 + ny * dpNorm2
-        b2.vx = tx * dpTan2 + nx * dpNorm1; b2.vy = ty * dpTan2 + ny * dpNorm1
+        # 3. Normal and Tangent Vectors
+        nx, ny = dx / dist, dy / dist
+        tx, ty = -ny, nx
+        
+        # 4. Dot Product Projection
+        dpTan1 = b1.vx * tx + b1.vy * ty
+        dpTan2 = b2.vx * tx + b2.vy * ty
+        dpNorm1 = b1.vx * nx + b1.vy * ny
+        dpNorm2 = b2.vx * nx + b2.vy * ny
+        
+        # 5. Swap Normal Momentum (Elastic Bounce)
+        m1, m2 = dpNorm2, dpNorm1
+        
+        # 6. Recombine Vectors
+        b1.vx = tx * dpTan1 + nx * m1; b1.vy = ty * dpTan1 + ny * m1
+        b2.vx = tx * dpTan2 + nx * m2; b2.vy = ty * dpTan2 + ny * m2
 
 class WindowEngine:
+    """Main Game Loop Manager using Windows Message Pump."""
     def __init__(self, title, w, h, bg):
         self.w, self.h, self.bg = w, h, bg
         self.objs = []; self._reg(title)
@@ -200,23 +220,34 @@ class WindowEngine:
     
     def _reg(self, t):
         self.wp = WNDPROCTYPE(self._proc)
+        
+        # FIX: Use kernel32.GetModuleHandleW instead of user32
         h_inst = kernel32.GetModuleHandleW(None)
+        
+        # FIX: Manually build WNDCLASS to avoid wintypes error
         wc = WNDCLASS()
-        wc.style = 0; wc.lpfnWndProc = self.wp; wc.cbClsExtra = 0; wc.cbWndExtra = 0
-        wc.hInstance = h_inst; wc.hIcon = 0; wc.hCursor = user32.LoadCursorW(None, 32512)
-        wc.hbrBackground = 0; wc.lpszMenuName = None
+        wc.style = 0
+        wc.lpfnWndProc = self.wp
+        wc.cbClsExtra = 0
+        wc.cbWndExtra = 0
+        wc.hInstance = h_inst
+        wc.hIcon = 0
+        wc.hCursor = user32.LoadCursorW(None, 32512)
+        wc.hbrBackground = 0
+        wc.lpszMenuName = None
         wc.lpszClassName = "GE_" + str(random.randint(0,9999))
+
         user32.RegisterClassW(ctypes.byref(wc))
         self.hw = user32.CreateWindowExW(0, wc.lpszClassName, t, WS_OVERLAPPEDWINDOW, 
                                          CW_USEDEFAULT, CW_USEDEFAULT, self.w, self.h, 
                                          None, None, h_inst, None)
-        user32.SetTimer(self.hw, 1, 16, None)
+        user32.SetTimer(self.hw, 1, 16, None) # 16ms Timer (~60FPS)
 
     def _proc(self, h, m, w, l):
         if m == WM_DESTROY: 
-            # --- CRITICAL FIX: STOP AUDIO ON EXIT ---
+            # FIX: Close all MCI threads on exit
             for sound in ACTIVE_SOUNDS:
-                MCI.send(f"close {sound.alias}")
+                winmm.mciSendStringW(f"close {sound.alias}", None, 0, 0)
             user32.PostQuitMessage(0)
             return 0
         if m == WM_TIMER: 
@@ -226,6 +257,7 @@ class WindowEngine:
         if m == WM_PAINT:
             p = PAINTSTRUCT(); dc = user32.BeginPaint(h, ctypes.byref(p))
             r = RECT(); user32.GetClientRect(h, ctypes.byref(r))
+            # Double Buffering Logic
             mdc = gdi32.CreateCompatibleDC(dc)
             mb = gdi32.CreateCompatibleBitmap(dc, r.right, r.bottom); ob = gdi32.SelectObject(mdc, mb)
             br = gdi32.CreateSolidBrush(self.bg); user32.FillRect(mdc, ctypes.byref(r), br); gdi32.DeleteObject(br)
@@ -256,16 +288,11 @@ class Circle(Box):
         gdi32.SelectObject(dc, ob); gdi32.DeleteObject(b)
 
 # =================================================================================
-# PART 3: AUDIO ENGINE
+# PART 3: AUDIO ENGINE (SOFTWARE LOOPING & LERP)
 # =================================================================================
 
 class MCI:
-    @staticmethod
-    def send(cmd):
-        buf = ctypes.create_unicode_buffer(255)
-        err = winmm.mciSendStringW(cmd, buf, 255, 0)
-        return err == 0
-    
+    """Communicates with winmm.dll to play audio strings."""
     @staticmethod
     def get_status(alias):
         buf = ctypes.create_unicode_buffer(255)
@@ -278,16 +305,20 @@ class Sound:
         self.alias = "snd_" + str(random.randint(0, 999999))
         self.is_looping = False
         if os.path.exists(self.filename):
-            MCI.send(f'open "{self.filename}" type waveaudio alias {self.alias}')
-            ACTIVE_SOUNDS.append(self) # Register for exit cleanup
+            winmm.mciSendStringW(f'open "{self.filename}" type waveaudio alias {self.alias}', None, 0, 0)
+            ACTIVE_SOUNDS.append(self)
+        else:
+            print(f"ERROR: File not found {self.filename}")
 
     def play(self, loop=False):
-        MCI.send(f'play {self.alias} from 0')
+        # Using software loop instead of hardware 'repeat'
+        winmm.mciSendStringW(f'play {self.alias} from 0', None, 0, 0)
         self.is_looping = loop
 
     def update(self, sw, sh):
+        """Must be called in the game loop to handle looping manually."""
         if self.is_looping and MCI.get_status(self.alias) == "stopped":
-            MCI.send(f'play {self.alias} from 0')
+            winmm.mciSendStringW(f'play {self.alias} from 0', None, 0, 0)
 
 class Synth:
     SR = 44100; NOTES = {}; names = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']; base = 55.0
@@ -308,9 +339,13 @@ class Synth:
     def save(fname, data):
         sz = len(data)
         h = struct.pack('<4sI4s4sIHHIIHH4sI', b'RIFF', 36+sz, b'WAVE', b'fmt ', 16, 1, 1, 44100, 44100, 1, 8, b'data', sz)
-        with open(fname, 'wb') as f: f.write(h); f.write(data)
+        try: 
+            with open(fname, 'wb') as f: f.write(h); f.write(data)
+        except PermissionError: 
+            print(f"WARN: {fname} locked.")
 
 class Sampler:
+    """UPDATED: Uses Linear Interpolation (Lerp) for smooth pitch shifting."""
     def __init__(self, filename, base_note='C3'):
         self.base_freq = Synth.NOTES.get(base_note, 130.81)
         self.data = [128]*1000
@@ -324,8 +359,23 @@ class Sampler:
         n_output = int(Synth.SR * duration_ms / 1000)
         step = target_freq / self.base_freq if target_freq > 0 else 0
         out, idx, dlen = bytearray(), 0.0, len(self.data)
+        
         for _ in range(n_output):
-            out.append(max(0, min(255, int(((self.data[int(idx)%dlen]-128)*volume)+128))))
+            # --- LINEAR INTERPOLATION (LERP) ALGORITHM ---
+            idx_i = int(idx)
+            idx_f = idx - idx_i # Fractional part
+            
+            # Normalize to signed space (-128 to 127) for math
+            s1 = self.data[idx_i % dlen] - 128
+            s2 = self.data[(idx_i + 1) % dlen] - 128
+            
+            # Interpolate: val = start + (end - start) * percent
+            interpolated = s1 + (s2 - s1) * idx_f
+            
+            # Normalize back to unsigned space (0 to 255)
+            final_val = int((interpolated * volume) + 128)
+            out.append(max(0, min(255, final_val)))
+            
             idx += step
         return out
 
@@ -333,7 +383,11 @@ class Melody:
     @staticmethod
     def compile(fname, bpm, notes):
         d, ms = bytearray(), 60000 / bpm
+        print(f"Compiling {fname}...")
+        
+        # Robust string cleaning to prevent ValueErrors
         clean_notes = notes.replace('(', '').replace(')', '').replace(' ', '')
+        
         for i in clean_notes.split(','):
             if '_' in i:
                 n, l = i.split('_'); nu, de = map(float, l.split('/')); dur = (nu/de)*ms*4
@@ -341,7 +395,7 @@ class Melody:
         Synth.save(fname, d)
 
 # =================================================================================
-# PART 4: RUNTIME
+# PART 4: RUNTIME DEMO
 # =================================================================================
 
 class Ball(Circle):
@@ -349,33 +403,51 @@ class Ball(Circle):
         super().__init__(x, y, r, c); self.vx, self.vy, self.sfx = vx, vy, sfx; self.target = None
     def update(self, sw, sh):
         self.x += self.vx; self.y += self.vy
+        
         hit = False
         if self.x <= 0: self.x=0; self.vx*=-1; hit=True
         elif self.x+self.w>=sw: self.x=sw-self.w; self.vx*=-1; hit=True
         if self.y <= 0: self.y=0; self.vy*=-1; hit=True
         elif self.y+self.h>=sh: self.y=sh-self.h; self.vy*=-1; hit=True
+        
         if hit and self.sfx: self.sfx.play()
+            
         if self.target and getattr(self, 'id', 0) == 1:
             if Physics.circle_collide(self, self.target):
-                Physics.resolve_elastic(self, self.target); self.sfx.play()
+                Physics.resolve_elastic(self, self.target)
+                if self.sfx: self.sfx.play()
 
 if __name__ == "__main__":
+    # FIX: Use Dynamic Filenames to prevent Permission/File Lock errors
     sid = str(random.randint(1000, 9999))
+    print(f"Session: {sid} | Generating Audio...")
+    
     f_bounce = f"bounce_{sid}.wav"; f_music = f"music_{sid}.wav"
-    Synth.save(f_bounce, Synth.tone('C4', 50, 0.4, 'sine'))
+    Synth.save(f_bounce, Synth.tone('C4', 50, 0.4, 'noise'))
     Melody.compile(f_music, 180, "(C4_1/4, E4_1/4, G4_1/2, C5_1/4, G4_1/4, E4_1/2)")
+    
+    # CRITICAL: Wait for OS to flush files to disk
     time.sleep(1.0)
     
-    game = WindowEngine("Engine v1.1 - Stable Edition", 800, 600, RGB(30,30,30))
-    sfx = Sound(f_bounce); bgm = Sound(f_music)
+    game = WindowEngine("Engine v1.2 - High Fidelity", 800, 600, RGB(30,30,30))
+    sfx = Sound(f_bounce)
+    bgm = Sound(f_music)
+    
+    # Enable Software Looping
     bgm.play(loop=True)
     
+    # Hook the BGM update to the game loop
     bgm.draw = lambda dc: None 
     game.add(bgm)
     
     b1 = Ball(200, 300, 40, RGB(255,0,0), 6, 4, sfx)
     b2 = Ball(600, 300, 40, RGB(0,0,255), -5, -3, sfx)
-    b1.id=1; b2.id=2; b1.target=b2; b2.target=b1
     
-    game.add(b1); game.add(b2)
+    b1.id = 1; b2.id = 2
+    b1.target = b2; b2.target = b1
+    
+    game.add(b1)
+    game.add(b2)
+    
+    print("Engine Running.")
     game.run()
